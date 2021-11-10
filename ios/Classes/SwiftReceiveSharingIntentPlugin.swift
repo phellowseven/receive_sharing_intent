@@ -132,7 +132,7 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
                             return nil
                         }
                         
-                        return SharedMediaFile.init(path: path, type: $0.type)
+                        return SharedMediaFile.init(path: path, thumbnail: nil, duration: nil, type: $0.type)
                     }
                     latestMedia = sharedMediaFiles
                     if(setInitialData) {
@@ -148,7 +148,7 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
                         guard let path = getAbsolutePath(for: $0.path) else {
                             return nil
                         }
-                        return SharedMediaFile.init(path: path, type: $0.type)
+                        return SharedMediaFile.init(path: path, thumbnail: nil, duration: nil, type: $0.type)
                     }
                     latestMedia = sharedMediaFiles
                     if(setInitialData) {
@@ -236,11 +236,15 @@ public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterSt
     
     class SharedMediaFile: Codable {
         var path: String;
+        var thumbnail: String?; // video thumbnail
+        var duration: Double?; // video duration in milliseconds
         var type: SharedMediaType;
         
         
-        init(path: String, type: SharedMediaType) {
+        init(path: String, thumbnail: String?, duration: Double?, type: SharedMediaType) {
             self.path = path
+            self.thumbnail = thumbnail
+            self.duration = duration
             self.type = type
         }
     }
