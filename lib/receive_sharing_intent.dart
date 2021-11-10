@@ -1,256 +1,163 @@
-import Flutter
-import UIKit
-import Photos
+import 'dart:async';
+import 'dart:convert';
 
-public class SwiftReceiveSharingIntentPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
-    static let kMessagesChannel = "receive_sharing_intent/messages";
-    static let kEventsChannelMedia = "receive_sharing_intent/events-media";
-    static let kEventsChannelLink = "receive_sharing_intent/events-text";
-    
-    private var customSchemePrefix = "ShareMedia";
-    
-    private var initialMedia: [SharedMediaFile]? = nil
-    private var latestMedia: [SharedMediaFile]? = nil
-    
-    private var initialText: String? = nil
-    private var latestText: String? = nil
-    
-    private var eventSinkMedia: FlutterEventSink? = nil;
-    private var eventSinkText: FlutterEventSink? = nil;
-    
-    // Singleton is required for calling functions directly from AppDelegate
-    // - it is required if the developer is using also another library, which requires to call "application(_:open:options:)"
-    // -> see Example app
-    public static let instance = SwiftReceiveSharingIntentPlugin()
-    
-    public static func register(with registrar: FlutterPluginRegistrar) {
-        let channel = FlutterMethodChannel(name: kMessagesChannel, binaryMessenger: registrar.messenger())
-        registrar.addMethodCallDelegate(instance, channel: channel)
-        
-        let chargingChannelMedia = FlutterEventChannel(name: kEventsChannelMedia, binaryMessenger: registrar.messenger())
-        chargingChannelMedia.setStreamHandler(instance)
-        
-        let chargingChannelLink = FlutterEventChannel(name: kEventsChannelLink, binaryMessenger: registrar.messenger())
-        chargingChannelLink.setStreamHandler(instance)
-        
-        registrar.addApplicationDelegate(instance)
-    }
-    
-    public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        
-        switch call.method {
-        case "getInitialMedia":
-            result(toJson(data: self.initialMedia));
-        case "getInitialText":
-            result(self.initialText);
-        case "reset":
-            self.initialMedia = nil
-            self.latestMedia = nil
-            self.initialText = nil
-            self.latestText = nil
-            result(nil);
-        default:
-            result(FlutterMethodNotImplemented);
-        }
-    }
+import 'package:flutter/services.dart';
 
-    // By Adding bundle id to prefix, we'll ensure that the correct application will be openned
-    // - found the issue while developing multiple applications using this library, after "application(_:open:options:)" is called, the first app using this librabry (first app by bundle id alphabetically) is opened
-    public func hasMatchingSchemePrefix(url: URL?) -> Bool {
-        if let url = url, let appDomain = Bundle.main.bundleIdentifier {
-            return url.absoluteString.hasPrefix("\(self.customSchemePrefix)-\(appDomain)")
-        }
-        return false
-    }
-    
-    // This is the function called on app startup with a shared link if the app had been closed already.
-    // It is called as the launch process is finishing and the app is almost ready to run.
-    // If the URL includes the module's ShareMedia prefix, then we process the URL and return true if we know how to handle that kind of URL or false if the app is not able to.
-    // If the URL does not include the module's prefix, we must return true since while our module cannot handle the link, other modules might be and returning false can prevent
-    // them from getting the chance to.
-    // Reference: https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1622921-application
-    public func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [AnyHashable : Any] = [:]) -> Bool {
-        if let url = launchOptions[UIApplication.LaunchOptionsKey.url] as? URL {
-            if (hasMatchingSchemePrefix(url: url)) {
-                return handleUrl(url: url, setInitialData: true)
-            }
-            return true
-        } else if let activityDictionary = launchOptions[UIApplication.LaunchOptionsKey.userActivityDictionary] as? [AnyHashable: Any] {
-            // Handle multiple URLs shared in
-            for key in activityDictionary.keys {
-                if let userActivity = activityDictionary[key] as? NSUserActivity {
-                    if let url = userActivity.webpageURL {
-                        if (hasMatchingSchemePrefix(url: url)) {
-                            return handleUrl(url: url, setInitialData: true)
-                        }
-                        return true
-                    }
-                }
-            }
-        }
-        return true
-    }
-    
-    // This is the function called on resuming the app from a shared link.
-    // It handles requests to open a resource by a specified URL. Returning true means that it was handled successfully, false means the attempt to open the resource failed.
-    // If the URL includes the module's ShareMedia prefix, then we process the URL and return true if we know how to handle that kind of URL or false if we are not able to.
-    // If the URL does not include the module's prefix, then we return false to indicate our module's attempt to open the resource failed and others should be allowed to.
-    // Reference: https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1623112-application
-    public func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
-        if (hasMatchingSchemePrefix(url: url)) {
-            return handleUrl(url: url, setInitialData: false)
-        }
-        return false
-    }
-    
-    // This function is called by other modules like Firebase DeepLinks.
-    // It tells the delegate that data for continuing an activity is available. Returning true means that our module handled the activity and that others do not have to. Returning false tells
-    // iOS that our app did not handle the activity.
-    // If the URL includes the module's ShareMedia prefix, then we process the URL and return true if we know how to handle that kind of URL or false if we are not able to.
-    // If the URL does not include the module's prefix, then we must return false to indicate that this module did not handle the prefix and that other modules should try to.
-    // Reference: https://developer.apple.com/documentation/uikit/uiapplicationdelegate/1623072-application
-    public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([Any]) -> Void) -> Bool {
-        if let url = userActivity.webpageURL {
-            if (hasMatchingSchemePrefix(url: url)) {
-                return handleUrl(url: url, setInitialData: true)
-            }
-        }
-        return false
-    }
-    
-    private func handleUrl(url: URL?, setInitialData: Bool) -> Bool {
-        if let url = url {
-            let appDomain = Bundle.main.bundleIdentifier!
-            let appGroupId = (Bundle.main.object(forInfoDictionaryKey: "AppGroupId") as? String) ?? "group.\(Bundle.main.bundleIdentifier!)"
-            let userDefaults = UserDefaults(suiteName: appGroupId)
-            if url.fragment == "media" {
-                if let key = url.host?.components(separatedBy: "=").last,
-                    let json = userDefaults?.object(forKey: key) as? Data {
-                    let sharedArray = decode(data: json)
-                    let sharedMediaFiles: [SharedMediaFile] = sharedArray.compactMap {
-                        guard let path = getAbsolutePath(for: $0.path) else {
-                            return nil
-                        }
-                        
-                        return SharedMediaFile.init(path: path, thumbnail: nil, duration: nil, type: $0.type)
-                    }
-                    latestMedia = sharedMediaFiles
-                    if(setInitialData) {
-                        initialMedia = latestMedia
-                    }
-                    eventSinkMedia?(toJson(data: latestMedia))
-                }
-            } else if url.fragment == "file" {
-                if let key = url.host?.components(separatedBy: "=").last,
-                    let json = userDefaults?.object(forKey: key) as? Data {
-                    let sharedArray = decode(data: json)
-                    let sharedMediaFiles: [SharedMediaFile] = sharedArray.compactMap{
-                        guard let path = getAbsolutePath(for: $0.path) else {
-                            return nil
-                        }
-                        return SharedMediaFile.init(path: path, thumbnail: nil, duration: nil, type: $0.type)
-                    }
-                    latestMedia = sharedMediaFiles
-                    if(setInitialData) {
-                        initialMedia = latestMedia
-                    }
-                    eventSinkMedia?(toJson(data: latestMedia))
-                }
+class ReceiveSharingIntent {
+  static const MethodChannel _mChannel =
+  const MethodChannel('receive_sharing_intent/messages');
+  static const EventChannel _eChannelMedia =
+  const EventChannel("receive_sharing_intent/events-media");
+  static const EventChannel _eChannelLink =
+  const EventChannel("receive_sharing_intent/events-text");
+
+  static Stream<List<SharedMediaFile>>? _streamMedia;
+  static Stream<String>? _streamLink;
+
+  /// Returns a [Future], which completes to one of the following:
+  ///
+  ///   * the initially stored media uri (possibly null), on successful invocation;
+  ///   * a [PlatformException], if the invocation failed in the platform plugin.
+  ///
+  /// NOTE. The returned media on iOS (iOS ONLY) is already copied to a temp folder.
+  /// So, you need to delete the file after you finish using it
+  static Future<List<SharedMediaFile>> getInitialMedia() async {
+    final json = await _mChannel.invokeMethod('getInitialMedia');
+    if (json == null) return [];
+    final encoded = jsonDecode(json);
+    return encoded
+        .map<SharedMediaFile>((file) => SharedMediaFile.fromJson(file))
+        .toList();
+  }
+
+  /// Returns a [Future], which completes to one of the following:
+  ///
+  ///   * the initially stored link (possibly null), on successful invocation;
+  ///   * a [PlatformException], if the invocation failed in the platform plugin.
+  static Future<String?> getInitialText() async {
+    return await _mChannel.invokeMethod('getInitialText');
+  }
+
+  /// A convenience method that returns the initially stored link
+  /// as a new [Uri] object.
+  ///
+  /// If the link is not valid as a URI or URI reference,
+  /// a [FormatException] is thrown.
+  static Future<Uri?> getInitialTextAsUri() async {
+    final data = await getInitialText();
+    if (data == null) return null;
+    return Uri.parse(data);
+  }
+
+  /// Sets up a broadcast stream for receiving incoming media share change events.
+  ///
+  /// Returns a broadcast [Stream] which emits events to listeners as follows:
+  ///
+  ///   * a decoded data ([List]) event (possibly null) for each successful
+  ///   event received from the platform plugin;
+  ///   * an error event containing a [PlatformException] for each error event
+  ///   received from the platform plugin.
+  ///
+  /// Errors occurring during stream activation or deactivation are reported
+  /// through the `FlutterError` facility. Stream activation happens only when
+  /// stream listener count changes from 0 to 1. Stream deactivation happens
+  /// only when stream listener count changes from 1 to 0.
+  ///
+  /// If the app was started by a link intent or user activity the stream will
+  /// not emit that initial one - query either the `getInitialMedia` instead.
+  static Stream<List<SharedMediaFile>> getMediaStream() {
+    if (_streamMedia == null) {
+      final stream =
+      _eChannelMedia.receiveBroadcastStream("media").cast<String?>();
+      _streamMedia = stream.transform<List<SharedMediaFile>>(
+        new StreamTransformer<String?, List<SharedMediaFile>>.fromHandlers(
+          handleData: (String? data, EventSink<List<SharedMediaFile>> sink) {
+            if (data == null) {
+              sink.add([]);
             } else {
-                latestText = url.absoluteString
-                if(setInitialData) {
-                    initialText = latestText
-                }
-                eventSinkText?(latestText)
+              final encoded = jsonDecode(data);
+              sink.add(encoded
+                  .map<SharedMediaFile>(
+                      (file) => SharedMediaFile.fromJson(file))
+                  .toList());
             }
-            return true
-        }
-        latestMedia = nil
-        latestText = nil
-        return false
+          },
+        ),
+      );
     }
-    
-    
-    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
-        if (arguments as! String? == "media") {
-            eventSinkMedia = events;
-        } else if (arguments as! String? == "text") {
-            eventSinkText = events;
-        } else {
-            // return FlutterError.init(code: "NO_SUCH_ARGUMENT", message: "No such argument\(String(describing: arguments))", details: nil);
-        }
-        return nil;
+    return _streamMedia!;
+  }
+
+  /// Sets up a broadcast stream for receiving incoming link change events.
+  ///
+  /// Returns a broadcast [Stream] which emits events to listeners as follows:
+  ///
+  ///   * a decoded data ([String]) event (possibly null) for each successful
+  ///   event received from the platform plugin;
+  ///   * an error event containing a [PlatformException] for each error event
+  ///   received from the platform plugin.
+  ///
+  /// Errors occurring during stream activation or deactivation are reported
+  /// through the `FlutterError` facility. Stream activation happens only when
+  /// stream listener count changes from 0 to 1. Stream deactivation happens
+  /// only when stream listener count changes from 1 to 0.
+  ///
+  /// If the app was started by a link intent or user activity the stream will
+  /// not emit that initial one - query either the `getInitialText` instead.
+  static Stream<String> getTextStream() {
+    if (_streamLink == null) {
+      _streamLink = _eChannelLink.receiveBroadcastStream("text").cast<String>();
     }
-    
-    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-        if (arguments as! String? == "media") {
-            eventSinkMedia = nil;
-        } else if (arguments as! String? == "text") {
-            eventSinkText = nil;
-        } else {
-            // return FlutterError.init(code: "NO_SUCH_ARGUMENT", message: "No such argument as \(String(describing: arguments))", details: nil);
-        }
-        return nil;
-    }
-    
-    private func getAbsolutePath(for identifier: String) -> String? {
-        if (identifier.starts(with: "file://") || identifier.starts(with: "/var/mobile/Media") || identifier.starts(with: "/private/var/mobile")) {
-            return identifier.replacingOccurrences(of: "file://", with: "")
-        }
-        let phAsset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: .none).firstObject
-        if(phAsset == nil) {
-            return nil
-        }
-        let (url, _) = getFullSizeImageURLAndOrientation(for: phAsset!)
-        return url
-    }
-    
-    private func getFullSizeImageURLAndOrientation(for asset: PHAsset)-> (String?, Int) {
-           var url: String? = nil
-           var orientation: Int = 0
-           let semaphore = DispatchSemaphore(value: 0)
-           let options2 = PHContentEditingInputRequestOptions()
-           options2.isNetworkAccessAllowed = true
-           asset.requestContentEditingInput(with: options2){(input, info) in
-               orientation = Int(input?.fullSizeImageOrientation ?? 0)
-               url = input?.fullSizeImageURL?.path
-               semaphore.signal()
-           }
-           semaphore.wait()
-           return (url, orientation)
-       }
-    
-    private func decode(data: Data) -> [SharedMediaFile] {
-        let encodedData = try? JSONDecoder().decode([SharedMediaFile].self, from: data)
-        return encodedData!
-    }
-    
-    private func toJson(data: [SharedMediaFile]?) -> String? {
-        if data == nil {
-            return nil
-        }
-        let encodedData = try? JSONEncoder().encode(data)
-         let json = String(data: encodedData!, encoding: .utf8)!
-        return json
-    }
-    
-    class SharedMediaFile: Codable {
-        var path: String;
-        var thumbnail: String?; // video thumbnail
-        var duration: Double?; // video duration in milliseconds
-        var type: SharedMediaType;
-        
-        
-        init(path: String, thumbnail: String?, duration: Double?, type: SharedMediaType) {
-            self.path = path
-            self.thumbnail = thumbnail
-            self.duration = duration
-            self.type = type
-        }
-    }
-    
-    enum SharedMediaType: Int, Codable {
-        case image
-        case file
-    }
+    return _streamLink!;
+  }
+
+  /// A convenience transformation of the stream to a `Stream<Uri>`.
+  ///
+  /// If the value is not valid as a URI or URI reference,
+  /// a [FormatException] is thrown.
+  ///
+  /// Refer to `getTextStream` about error/exception details.
+  ///
+  /// If the app was started by a share intent or user activity the stream will
+  /// not emit that initial uri - query either the `getInitialTextAsUri` instead.
+  static Stream<Uri> getTextStreamAsUri() {
+    return getTextStream().transform<Uri>(
+      new StreamTransformer<String, Uri>.fromHandlers(
+        handleData: (String data, EventSink<Uri> sink) {
+          sink.add(Uri.parse(data));
+        },
+      ),
+    );
+  }
+
+  /// Call this method if you already consumed the callback
+  /// and don't want the same callback again
+  static void reset() {
+    _mChannel.invokeMethod('reset').then((_) {});
+  }
 }
+
+class SharedMediaFile {
+  /// Image or Video path.
+  /// NOTE. for iOS only the file is always copied
+  final String path;
+
+  /// Video thumbnail
+  final String? thumbnail;
+
+  /// Video duration in milliseconds
+  final int? duration;
+
+  /// Whether its a video or image or file
+  final SharedMediaType type;
+
+  SharedMediaFile(this.path, this.thumbnail, this.duration, this.type);
+
+  SharedMediaFile.fromJson(Map<String, dynamic> json)
+      : path = json['path'],
+        thumbnail = json['thumbnail'],
+        duration = json['duration'],
+        type = SharedMediaType.values[json['type']];
+}
+
+enum SharedMediaType { IMAGE, VIDEO, FILE }
