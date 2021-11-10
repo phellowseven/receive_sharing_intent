@@ -160,4 +160,4 @@ class SharedMediaFile {
         type = SharedMediaType.values[json['type']];
 }
 
-enum SharedMediaType { IMAGE, VIDEO, FILE }
+enum SharedMediaType { IMAGE, FILE }
