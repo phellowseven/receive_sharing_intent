@@ -114,7 +114,7 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         when {
             (intent.type?.startsWith("text") != true)
                     && (intent.action == Intent.ACTION_SEND
-                    || intent.action == Intent.ACTION_SEND_MULTIPLE) -> { // Sharing images or videos
+                    || intent.action == Intent.ACTION_SEND_MULTIPLE) -> { // Sharing images
 
                 val value = getMediaUris(intent)
                 if (initial) initialMedia = value
@@ -181,36 +181,20 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         val mimeType = URLConnection.guessContentTypeFromName(path)
         return when {
             mimeType?.startsWith("image") == true -> MediaType.IMAGE
-            mimeType?.startsWith("video") == true -> MediaType.VIDEO
             else -> MediaType.FILE
         }
     }
 
     private fun getThumbnail(path: String, type: MediaType): String? {
-        if (type != MediaType.VIDEO) return null // get video thumbnail only
-
-        val videoFile = File(path)
-        val targetFile = File(applicationContext.cacheDir, "${videoFile.name}.png")
-        val bitmap = ThumbnailUtils.createVideoThumbnail(path, MediaStore.Video.Thumbnails.MINI_KIND)
-                ?: return null
-        FileOutputStream(targetFile).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        bitmap.recycle()
-        return targetFile.path
+        return null
     }
 
     private fun getDuration(path: String, type: MediaType): Long? {
-        if (type != MediaType.VIDEO) return null // get duration for video only
-        val retriever = MediaMetadataRetriever()
-        retriever.setDataSource(path)
-        val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-        retriever.release()
-        return duration
+        return null
     }
 
     enum class MediaType {
-        IMAGE, VIDEO, FILE;
+        IMAGE, FILE;
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
