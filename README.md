@@ -1,3 +1,5 @@
+# This fork is only intended to allow users to share images (single or multiple) and pdf documents into the app.
+
 # receive_sharing_intent
 
 A flutter plugin that enables flutter apps to receive sharing photos, videos, text, urls or any other file types from another app.
